@@ -26,8 +26,17 @@ jobs:
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            electron/package-lock.json
 
-      - name: Install dependencies
+      - name: Install main dependencies
+        run: npm ci
+        env:
+          NPM_CONFIG_LEGACY_PEER_DEPS: true
+
+      - name: Install Electron desktop dependencies
+        working-directory: electron
         run: npm ci
         env:
           NPM_CONFIG_LEGACY_PEER_DEPS: true
