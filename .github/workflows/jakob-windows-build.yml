@@ -1,0 +1,57 @@
+name: Build Jakob OmniRoute Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - release/v3.8.51
+    paths:
+      - JAKOB_SETUP.md
+      - .github/workflows/jakob-windows-build.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          NPM_CONFIG_LEGACY_PEER_DEPS: true
+
+      - name: Build OmniRoute Windows desktop
+        shell: pwsh
+        env:
+          JWT_SECRET: ci-build-secret-with-sufficient-length-for-validation
+          NODE_OPTIONS: --max_old_space_size=6144
+          OMNIROUTE_USE_TURBOPACK: "0"
+        run: npm run electron:build:win
+
+      - name: Verify Windows output
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "electron/dist-electron")) {
+            throw "electron/dist-electron was not created"
+          }
+          Get-ChildItem "electron/dist-electron" -Recurse | Select-Object FullName, Length
+
+      - name: Upload Windows installer and portable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: OmniRoute-3.8.51-Windows
+          path: electron/dist-electron/*
+          if-no-files-found: error
+          retention-days: 30
