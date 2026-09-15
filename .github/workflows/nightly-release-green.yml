@@ -74,21 +74,6 @@ jobs:
       API_KEY_SECRET: ci-nightly-api-key-secret-long
       DISABLE_SQLITE_AUTO_BACKUP: "true"
     steps:
-      - name: Expand Virtual Memory (Native 10GB Swap)
-        # Mirrors build.yml: this job runs a production build whose native
-        # (Turbopack) memory peak OOM-kills the 7 GB hosted runner mid-build
-        # ("The runner has received a shutdown signal", exit 143). The
-        # self-hosted omni runners have the RAM, so skip the sudo dance there.
-        if: runner.environment == 'github-hosted'
-        run: |
-          sudo swapoff -a || true
-          sudo rm -f /mnt/swapfile /swapfile
-          sudo fallocate -l 10G /mnt/swapfile || sudo dd if=/dev/zero of=/mnt/swapfile bs=1M count=10240
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
-          free -h
-
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -142,6 +127,7 @@ jobs:
         id: validate
         env:
           EVENT_NAME: ${{ github.event_name }}
+          IS_HOSTED: ${{ runner.environment == 'github-hosted' }}
         run: |
           set +e
           # --hermetic: scrub live-test trigger vars (self-hosted runner may carry
@@ -152,8 +138,18 @@ jobs:
           # pr-test-policy) + build + full suites. PRs into release/** only get the
           # fast-gates, so these accrue silently and explode in layers on the release PR
           # (v3.8.46: 11 static base-reds leaked).
+          # Hosted-runner degrade: the 7 GB hosted runner cannot survive the production
+          # build (Turbopack native memory peak — 19 of the last 30 hosted builds died
+          # with "The runner has received a shutdown signal" even WITH a 10 GB swapfile,
+          # see build.yml). So on hosted runners the scheduled mode runs --full-ci
+          # WITHOUT --with-build: every static gate + the full test suites still run,
+          # only the build itself is skipped. The build is validated where a build
+          # actually fits (manual dispatch, or USE_VPS_RUNNER=true on a self-hosted pool).
           if [ "$EVENT_NAME" = "push" ]; then
             MODE="--quick"
+          elif [ "$IS_HOSTED" = "true" ]; then
+            MODE="--full-ci"
+            echo "::notice::Build gate skipped on the 7 GB hosted runner (cannot build this tree — see build.yml). Set USE_VPS_RUNNER=true with a self-hosted pool to validate the build."
           else
             MODE="--with-build --full-ci"
           fi
@@ -267,27 +263,21 @@ jobs:
           # This repo's default branch is a release/v* branch; `main` is only
           # created at the release squash. Skip the whole job (success, not
           # failure) when it doesn't exist yet.
-          if gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .name >/dev/null 2>&1; then
+          # Only an actual HTTP 404 means "no main branch". Any other API
+          # failure (rate limit, bad token, outage) must fail loudly — silently
+          # skipping validation on an API error would paint the job green
+          # without checking anything.
+          if gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .name >/dev/null 2>api-err.txt; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "main branch exists — running main-green validation"
-          else
+          elif grep -q "HTTP 404" api-err.txt; then
             echo "exists=false" >> "$GITHUB_OUTPUT"
             echo "No main branch in ${GITHUB_REPOSITORY} — skipping main-green validation"
+          else
+            echo "Could not determine whether the main branch exists (not a 404):"
+            cat api-err.txt
+            exit 1
           fi
-
-      - name: Expand Virtual Memory (Native 10GB Swap)
-        # Mirrors build.yml (see release-green job above): the scheduled full
-        # sweep builds the tree, whose native memory peak OOM-kills the 7 GB
-        # hosted runner. Self-hosted omni runners have the RAM.
-        if: runner.environment == 'github-hosted' && steps.maincheck.outputs.exists == 'true'
-        run: |
-          sudo swapoff -a || true
-          sudo rm -f /mnt/swapfile /swapfile
-          sudo fallocate -l 10G /mnt/swapfile || sudo dd if=/dev/zero of=/mnt/swapfile bs=1M count=10240
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
-          free -h
 
       - uses: actions/checkout@v7
         if: steps.maincheck.outputs.exists == 'true'
@@ -310,11 +300,20 @@ jobs:
         if: steps.maincheck.outputs.exists == 'true'
         env:
           EVENT_NAME: ${{ github.event_name }}
+          IS_HOSTED: ${{ runner.environment == 'github-hosted' }}
         run: |
           set +e
           # push (a merge into main) → --quick fast HARD gates; schedule/dispatch → full sweep.
+          # Hosted-runner degrade (same as the release-green job): the 7 GB hosted runner
+          # cannot survive the production build (see build.yml — 19/30 hosted builds died
+          # even with a 10 GB swapfile), so on hosted the scheduled mode runs --full-ci
+          # without --with-build. Set USE_VPS_RUNNER=true with a self-hosted pool to
+          # validate the build.
           if [ "$EVENT_NAME" = "push" ]; then
             MODE="--quick"
+          elif [ "$IS_HOSTED" = "true" ]; then
+            MODE="--full-ci"
+            echo "::notice::Build gate skipped on the 7 GB hosted runner (cannot build this tree — see build.yml). Set USE_VPS_RUNNER=true with a self-hosted pool to validate the build."
           else
             MODE="--with-build --full-ci"
           fi
