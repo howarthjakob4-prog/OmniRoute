@@ -335,7 +335,7 @@ function findUnquotedCredentialEnd(value: string, start: number): number {
   return end;
 }
 
-function redactLabeledCredentialAssignments(value: string): string {
+export function redactLabeledCredentialAssignments(value: string): string {
   const parts: string[] = [];
   let copyStart = 0;
   let index = 0;
@@ -689,7 +689,11 @@ function sanitizeErrorMessageWithStackPolicy(
   // Raw URI credentials must be projected before the path tokenizer consumes
   // the URI tail; Windows path evidence still stays intact until after this
   // credential-only pass and is redacted before escape normalization.
+  // Labeled assignments (access_token=..., api_key=...) must also be
+  // projected before path redaction, otherwise the path tokenizer consumes
+  // the credential value as path content and the [REDACTED] evidence is lost.
   str = redactKnownCredentialPatterns(redactSensitiveUrlCredentials(stripStackTail(str)));
+  str = redactLabeledCredentialAssignments(str);
   str = redactErrorPaths(str);
   str = redactSensitiveErrorText(str);
   str = truncateSanitizedErrorText(str);

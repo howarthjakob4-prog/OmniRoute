@@ -3,11 +3,17 @@ import type { getProviderCredentials } from "@/sse/services/auth.ts";
 import type { updateFromHeaders, updateFromResponseBody } from "../../services/rateLimitManager.ts";
 import type { writeTerminalStatus } from "@/shared/utils/terminalStatus.ts";
 import type { updateProviderConnection } from "@/lib/db/providers.ts";
-import type { lockModel, recordCoreOwnedAntigravityQuotaState } from "../../services/accountFallback.ts";
+import type {
+  lockModel,
+  recordCoreOwnedAntigravityQuotaState,
+} from "../../services/accountFallback.ts";
 import { createErrorResult } from "../../utils/error.ts";
 import { applyStatusRestatement } from "../../config/upstreamStatusRestatement.ts";
 import { recoverAnthropicThinkingSignature } from "./thinkingSignatureRecovery.ts";
-import { isModelUnavailableError, getNextFamilyFallback as defaultGetNextFamilyFallback } from "../../services/modelFamilyFallback.ts";
+import {
+  isModelUnavailableError,
+  getNextFamilyFallback as defaultGetNextFamilyFallback,
+} from "../../services/modelFamilyFallback.ts";
 import { COOLDOWN_MS } from "../../config/errorConfig.ts";
 import { normalizeHeaders } from "../../utils/headers.ts";
 
@@ -179,13 +185,25 @@ async function toOutcome(
     };
   }
   let message = attempt.response.statusText || "upstream error";
+  let errorCode: string | undefined;
+  let errorType: string | undefined;
   let body: unknown = attempt.transformedBody;
   try {
     // clone() is the drain. sendProviderAttempt must not cancel() a streaming
     // non-2xx body before we get here (BYOP 422 / Codex 429 Retry-After).
     body = JSON.parse(await attempt.response.clone().text());
-    const err = (body as { error?: { message?: unknown } } | null)?.error;
-    if (err && typeof err.message === "string" && err.message) message = err.message;
+    const err = (body as { error?: { message?: unknown; code?: unknown; type?: unknown } } | null)
+      ?.error;
+    if (err) {
+      if (typeof err.message === "string" && err.message) message = err.message;
+      // Preserve executor-supplied error classification (e.g. Antigravity's
+      // fail-closed missing_project_id / oauth_missing_project_id) so the
+      // client-visible code/type survive the pipeline instead of being
+      // re-derived from the status table. buildErrorBody only keeps
+      // whitelisted identifiers, so untrusted upstream codes stay bounded.
+      if (typeof err.code === "string" && err.code) errorCode = err.code;
+      if (typeof err.type === "string" && err.type) errorType = err.type;
+    }
   } catch {
     // keep statusText
   }
@@ -199,7 +217,9 @@ async function toOutcome(
   const result = createErrorResult(
     restatement.status,
     message,
-    restatement.retryAfterMs
+    restatement.retryAfterMs,
+    errorCode,
+    errorType
   );
   return {
     kind: "error",
@@ -273,7 +293,12 @@ export async function runProviderExecutionPipeline(
 
     const status = attempt.response.status;
     if (status >= 200 && status < 300) {
-      return toOutcome(attempt, wire.currentModel, currentConnectionId(connection), target.provider);
+      return toOutcome(
+        attempt,
+        wire.currentModel,
+        currentConnectionId(connection),
+        target.provider
+      );
     }
 
     const isolateProbe = await state.isolateProbeFailures();
@@ -401,11 +426,16 @@ export async function runProviderExecutionPipeline(
           };
         },
       });
-      if (signatureRecovery.attempted && signatureRecovery.succeeded && signatureRecovery.execution) {
+      if (
+        signatureRecovery.attempted &&
+        signatureRecovery.succeeded &&
+        signatureRecovery.execution
+      ) {
         lastAttempt = {
           response: signatureRecovery.execution.response,
           url: signatureRecovery.execution.url ?? attempt.url,
-          headers: (signatureRecovery.execution.headers as Record<string, string>) ?? attempt.headers,
+          headers:
+            (signatureRecovery.execution.headers as Record<string, string>) ?? attempt.headers,
           transformedBody: signatureRecovery.execution.transformedBody ?? attempt.transformedBody,
         };
         return toOutcome(
@@ -430,7 +460,11 @@ export async function runProviderExecutionPipeline(
         // keep statusText
       }
       if (isModelUnavailableError(status, fallbackMessage, target.provider)) {
-        const nextModel = resolveFamilyFallback(wire.currentModel, wire.triedModels, target.provider);
+        const nextModel = resolveFamilyFallback(
+          wire.currentModel,
+          wire.triedModels,
+          target.provider
+        );
         if (nextModel) {
           wire.setBodyAndModel({ ...wire.body, model: nextModel }, nextModel);
           modelFallbackPending = true;
@@ -443,7 +477,12 @@ export async function runProviderExecutionPipeline(
   }
 
   if (lastAttempt) {
-    return toOutcome(lastAttempt, wire.currentModel, currentConnectionId(connection), target.provider);
+    return toOutcome(
+      lastAttempt,
+      wire.currentModel,
+      currentConnectionId(connection),
+      target.provider
+    );
   }
   return leaseMismatch(wire.currentModel, currentConnectionId(connection));
 }

@@ -21,12 +21,52 @@ export function derivePostInjectionRequestIdentity(input: {
   postInjectionBody: Record<string, unknown>;
 }): string {
   const stableClientRequestId = getIdempotencyKey(input.headers as never);
+  // Strip internal helper keys before hashing: the raw client body may carry
+  // Map instances (e.g. _toolNameMap) that canonical JSON cannot serialize.
+  // These are request-scoped helpers, not identity-relevant content.
+  const sanitizedBody = sanitizeBodyForIdentity(input.postInjectionBody);
   return deriveToolRequestIdentity({
     apiKeyId: input.apiKeyId,
     stableClientRequestId,
     skillRequestId: input.skillRequestId,
-    postInjectionBody: input.postInjectionBody,
+    postInjectionBody: sanitizedBody,
   });
+}
+
+/**
+ * Remove internal helper keys and convert Maps/Sets to plain structures so the
+ * body can be hashed for request identity. Internal keys (prefixed with _)
+ * are request-scoped and must not affect identity.
+ */
+function sanitizeBodyForIdentity(value: unknown): unknown {
+  if (value instanceof Map) {
+    const obj: Record<string, unknown> = {};
+    for (const [k, v] of value) {
+      obj[String(k)] = sanitizeBodyForIdentity(v);
+    }
+    return obj;
+  }
+  if (value instanceof Set) {
+    return Array.from(value).map(sanitizeBodyForIdentity);
+  }
+  if (Array.isArray(value)) {
+    return value.map(sanitizeBodyForIdentity);
+  }
+  if (value !== null && typeof value === "object") {
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) {
+      // Non-plain objects (Date, class instances, etc.) — use string form
+      return String(value);
+    }
+    const result: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      // Skip internal helper keys
+      if (k.startsWith("_")) continue;
+      result[k] = sanitizeBodyForIdentity(v);
+    }
+    return result;
+  }
+  return value;
 }
 
 export async function continueServerOwnedToolLoop(input: {
