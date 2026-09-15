@@ -2,15 +2,13 @@
  * Public-safe error bodies for the tunnel and MITM management routes.
  *
  * Hard Rule #12 forbids returning a raw `err.message` in an HTTP body, and
- * `sanitizeErrorMessage()` is the repo's general answer. It is not enough here:
- * it only rewrites tokens that look like an absolute path ending in a *source*
- * extension (`ts|tsx|js|jsx|mjs|cjs` — see `SOURCE_EXT` in
- * open-sse/utils/error.ts), so the three leak shapes these routes actually
- * produce all survive it verbatim:
- *
- *   - config/state paths:  `ENOENT ... open '/home/<user>/.omniroute/data/tunnels.json'`
- *   - binary paths:        `spawn /usr/local/bin/cloudflared ENOENT`
- *   - Tailscale auth keys: `invalid key tskey-auth-kMn3Qz7RtY-9fVbXsPq2LdWc`
+ * `sanitizeErrorMessage()` is the repo's general answer. It now covers all
+ * filesystem-path leak shapes these routes produce (ENOENT config/state paths,
+ * binary paths, daemon state paths, Windows config paths). The one remaining
+ * leak shape that survives it verbatim is the Tailscale auth key
+ * (`invalid key tskey-auth-...`), which is why this module still exists:
+ * these routes return a fixed operator-facing sentence plus a coarse
+ * machine-readable `reason`, and log the real error server-side.
  *
  * These come from child processes (`cloudflared`, `tailscale`, `tailscaled`,
  * `ngrok`) and from filesystem I/O on the operator's home directory, so the raw

@@ -13,7 +13,6 @@ type BypassClass = "A" | "B" | "C";
 
 const EXPECTED: Record<InventoryKind, Record<string, number>> = {
   credential: {
-    "open-sse/handlers/chatCore.ts": 2,
     "open-sse/services/imageCombo.ts": 1,
     "open-sse/services/speechCombo.ts": 1,
     "open-sse/services/videoCombo.ts": 2,
@@ -80,7 +79,11 @@ const EXPECTED: Record<InventoryKind, Record<string, number>> = {
   },
   connection: {
     "open-sse/handlers/autoComboCandidates.ts": 1,
-    "open-sse/handlers/chatCore.ts": 2,
+    // Non-streaming 401/403 refresh (chatCore.ts) queries the connection twice:
+    // once for the CAS re-read guard, once to detect concurrent refresh-token
+    // rotation after a failed refresh — both are lease-fencing reads, not
+    // independent dispatch.
+    "open-sse/handlers/chatCore.ts": 4,
     "open-sse/handlers/cursorCliProxy.ts": 1,
     "open-sse/services/alibabaFreeTier.ts": 1,
     "open-sse/services/alibabaFreeTierQuotaFetcher.ts": 1,
@@ -88,18 +91,21 @@ const EXPECTED: Record<InventoryKind, Record<string, number>> = {
     "open-sse/services/antigravityFamilyCooldown.ts": 1,
     // v3.8.50 back-merge additions (f95b03d7): combo routing infra and the
     // volcengine-plan binding/auto-sync services query connections the same
-    // way as their classified siblings.
-    "open-sse/services/combo.ts": 1,
+    // way as their classified siblings. The combo split moved the query from
+    // combo.ts to combo/executeTargetGates.ts.
+    "open-sse/services/combo/executeTargetGates.ts": 1,
     "open-sse/services/combo/providerWildcard.ts": 1,
     "open-sse/services/tokenRefresh.ts": 1,
     "src/lib/providers/volcPlanAutoSyncBackfill.ts": 1,
     "src/lib/providers/volcenginePlanBinding.ts": 1,
+    "src/lib/usage/grokResetCredits.ts": 1,
     "src/app/(dashboard)/dashboard/tools/agent-bridge/page.tsx": 1,
     "src/app/api/cloud/auth/route.ts": 1,
     "src/app/api/cloud/credentials/update/route.ts": 1,
     "src/app/api/models/route.ts": 1,
     "src/app/api/monitoring/health/route.ts": 1,
     "src/app/api/oauth/[provider]/[action]/route.ts": 4,
+    "src/app/api/usage/codex-reset-credit/route.ts": 1,
     "src/app/api/oauth/codex/import/route.ts": 1,
     "src/app/api/oauth/kiro/api-key/route.ts": 1,
     "src/app/api/oauth/kiro/auto-import/route.ts": 2,
@@ -336,7 +342,15 @@ test("managed request surfaces are fenced centrally or rejected before independe
     core,
     /assertManagedLeaseFence\(getExecutionConnectionId\(getExecutionCredentials\(\)\)\)/
   );
-  assert.match(core, /provider === "codex" &&\s*!managedLease/);
+  // The inline `provider === "codex" && !managedLease` gate was centralized
+  // into the assertManagedLeaseFence helper below: a managed lease is now
+  // fenced (throws before independent dispatch) at each dispatch site,
+  // instead of branching inline on the provider name. Pin the centralized
+  // fence definition — it returns early when there is no managed lease and
+  // delegates the actual gate to assertExclusiveConnectionLeaseFence.
+  assert.match(core, /const assertManagedLeaseFence = \(attemptConnectionId/);
+  assert.match(core, /if \(!managedLease\) return;/);
+  assert.match(core, /assertExclusiveConnectionLeaseFence\(\{/);
   assert.match(ws, /LEASE_UNSUPPORTED_TRANSPORT/);
   assert.match(internalKeys, /!k\.scopes\?\.includes\(EXCLUSIVE_LEASE_SCOPE\)/);
   for (const source of auxiliaryIsolationSources) {

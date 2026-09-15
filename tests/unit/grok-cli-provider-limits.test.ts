@@ -19,6 +19,8 @@ const { mergeProviderLimitsCacheEntry } =
 
 const originalFetch = globalThis.fetch;
 
+const EXPIRES = Math.floor(Date.now() / 1000) + 86400;
+
 interface FetchCall {
   url: string;
   init: RequestInit;
@@ -75,7 +77,7 @@ function oneResetTokenResponse(): Response {
   const token = Buffer.concat([
     encodeLengthDelimited(1, Buffer.from("test-token-id", "utf8")),
     encodeVarintField(2, 1786560540),
-    encodeVarintField(3, 1789238940),
+    encodeVarintField(3, EXPIRES),
   ]);
   const payload = encodeLengthDelimited(10, token);
   const trailer = Buffer.from("grpc-status:0\r\n", "utf8");
@@ -91,7 +93,7 @@ function liveResetTokenResponse(): Response {
   const token = Buffer.concat([
     encodeLengthDelimited(10, Buffer.from("test-token-id", "utf8")),
     encodeLengthDelimited(20, timestamp(1786560540)),
-    encodeLengthDelimited(30, timestamp(1789238940)),
+    encodeLengthDelimited(30, timestamp(EXPIRES)),
   ]);
   const payload = encodeLengthDelimited(10, token);
   const trailer = Buffer.from("grpc-status:0\r\n", "utf8");

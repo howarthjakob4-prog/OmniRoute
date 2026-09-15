@@ -114,6 +114,7 @@ const SAFE_PUBLIC_ERROR_IDENTIFIERS = new Set([
   "gemini_tpm_exhausted",
   "gcp_project_required",
   "grok_error",
+  "huggingchat_generation_error",
   "insufficient_quota",
   "incompatible_reasoning_effort",
   "internal_server_error",
@@ -282,6 +283,7 @@ const SAFE_PUBLIC_ERROR_IDENTIFIERS = new Set([
   "vision",
   "claude_web_protocol_error",
   "wreq_unavailable",
+  "zai_stream_error",
 ]);
 
 function isSafePublicErrorIdentifier(value: string): boolean {

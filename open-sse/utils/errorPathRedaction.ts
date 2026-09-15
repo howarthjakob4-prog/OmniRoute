@@ -17,6 +17,7 @@ const HTTP_METHODS = [
 ] as const;
 const CLEAR_PROSE_BOUNDARIES = [
   "after",
+  "authorization",
   "because",
   "before",
   "but",
@@ -31,7 +32,37 @@ const CLEAR_PROSE_BOUNDARIES = [
   "then",
   "when",
   "while",
+  "with",
 ] as const;
+
+// Public API routes served by this gateway are never filesystem paths. They
+// must survive error sanitization so user-facing endpoint hints keep working
+// (e.g. #6457 "Use POST /v1/images/generations instead") and upstream status
+// messages stay intelligible ("Invalid JSON response from /models").
+const PUBLIC_API_ROUTE_PREFIXES = ["/v1/", "/v2/", "/v3/", "/api/"] as const;
+const PUBLIC_API_ROUTE_EXACT = new Set(["/models"]);
+
+/** True when a `/`-leading token is a public API route rather than a filesystem path. */
+function isPublicApiRouteToken(token: string): boolean {
+  const candidate = token.toLowerCase();
+  if (PUBLIC_API_ROUTE_EXACT.has(candidate)) return true;
+  return (PUBLIC_API_ROUTE_PREFIXES as readonly string[]).some((prefix) =>
+    candidate.startsWith(prefix)
+  );
+}
+
+/**
+ * True when the token at [start, end) contains a credential-redaction marker
+ * emitted by an earlier sanitization pass ([REDACTED] / <redacted>, including
+ * labeled assignments such as api_key=[REDACTED]). Markers are never
+ * filesystem path content; they terminate a path span so redaction evidence
+ * is never consumed by fail-closed path redaction.
+ */
+function tokenContainsRedactionMarker(value: string, start: number, end: number): boolean {
+  const token = value.slice(start, end);
+  return /\[REDACTED\]|<redacted>/i.test(token);
+}
+
 const POSIX_FILESYSTEM_ROOTS = [
   "/Users",
   "/app",
@@ -281,7 +312,13 @@ function redactQuotedAbsolutePaths(value: string): string {
     const isShieldedRoute =
       value.charCodeAt(candidateStart) === 0x2f &&
       !isWindowsAbsolutePathAt(value, candidateStart) &&
-      hasRouteContextBefore(value, index);
+      (hasRouteContextBefore(value, index) ||
+        isPublicApiRouteToken(
+          value.slice(
+            candidateStart,
+            trimPathSpanEnd(value, candidateStart, findTokenEnd(value, candidateStart))
+          )
+        ));
     // Route/API contexts use their first closing quote so a later quoted
     // filesystem path is still scanned independently. Filesystem candidates
     // take the last matching quote on the line: POSIX filenames may themselves
@@ -500,6 +537,15 @@ function findUnquotedPathEnd(
       return resolveEndpoint();
     }
 
+    // Credential-redaction markers emitted by earlier passes are never
+    // filesystem path content. Terminate the span here: fail-closed may still
+    // consume ambiguous fragments before the marker, but the marker itself
+    // (and everything after it) is preserved so redaction evidence survives.
+    if (tokenContainsRedactionMarker(value, tokenStart, tokenEnd)) {
+      const endpoint = resolveEndpoint();
+      return endpoint >= 0 ? Math.min(endpoint, tokenStart) : tokenStart;
+    }
+
     const containsSeparator = tokenContainsPathSeparator(value, tokenStart, tokenEnd);
     const containsExtensionEvidence = tokenContainsPathExtensionEvidence(
       value,
@@ -568,6 +614,15 @@ function redactUnquotedAbsolutePathSpans(value: string): string {
   let index = 0;
 
   while (index < value.length) {
+    // Public API routes are never filesystem paths: skip them so user-facing
+    // endpoint hints survive sanitization (#6457).
+    if (value.charCodeAt(index) === 0x2f) {
+      const routeTokenEnd = findTokenEnd(value, index);
+      if (isPublicApiRouteToken(value.slice(index, trimPathSpanEnd(value, index, routeTokenEnd)))) {
+        index = routeTokenEnd;
+        continue;
+      }
+    }
     const previous = index > 0 ? value[index - 1] : "";
     const followsQuote = previous === "'" || previous === '"' || previous === "`";
     const hasCommonBoundary =

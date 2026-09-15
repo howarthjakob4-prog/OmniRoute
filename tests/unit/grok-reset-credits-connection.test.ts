@@ -18,7 +18,7 @@ const originalFetch = globalThis.fetch;
 const LIST_URL = "https://grok.com/prod_mc_billing.ConsumerUiSvc/GetRemainingResets";
 const REDEEM_URL = "https://grok.com/prod_mc_billing.ConsumerUiSvc/RedeemReset";
 const GRANTED = 1786560540;
-const EXPIRES = 1789238940;
+const EXPIRES = Math.floor(Date.now() / 1000) + 86400;
 const TOKEN_ID = "test-token-id";
 
 function encodeVarint(value: number): Buffer {

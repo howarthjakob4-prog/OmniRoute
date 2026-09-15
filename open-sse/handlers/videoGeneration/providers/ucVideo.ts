@@ -319,9 +319,15 @@ async function pollUcVideoUrl(
 ): Promise<UcPollOutcome> {
   const deadline = Date.now() + timeoutMs;
   let attempt = 0;
+  // Bound iterations: with a no-op sleep (tests) the loop could otherwise spin
+  // thousands of polls inside a few milliseconds and outrun the deadline,
+  // falsely observing a "ready" state. Cap at the number of polls that fit in
+  // the timeout window (+1 for the initial immediate poll).
+  const maxAttempts = Math.max(1, Math.ceil(timeoutMs / Math.max(1, pollIntervalMs)) + 1);
   // Poll at least once even when timeoutMs is 0.
   do {
     attempt += 1;
+    if (attempt > maxAttempts) break;
     let resp: Response;
     try {
       resp = await fetchImpl(url, { method: "HEAD", signal });

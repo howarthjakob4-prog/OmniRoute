@@ -99,5 +99,10 @@ test("handleChat tolerates non-JSON rate-limit bodies without breaking fallback 
   const body = (await response.json()) as any;
 
   assert.equal(response.status, 429);
-  assert.match(body.error.message, /rate limit exceeded but body is not json/i);
+  // Error-sanitization hardening replaces the raw upstream text with the
+  // sanitized form; the fallback flow (429 status, retry hint) still works.
+  assert.match(
+    body.error.message,
+    /\[openai\/gpt-4\.1\] \[429\]: upstream error \(reset after 3s\)/
+  );
 });

@@ -1,9 +1,6 @@
 import type { RequestPipelinePayloads } from "@omniroute/open-sse/utils/requestLogger.ts";
 import { classifyProviderError } from "@omniroute/open-sse/services/errorClassifier.ts";
-import {
-  sanitizeErrorMessage,
-  sanitizeUpstreamDetails,
-} from "@omniroute/open-sse/utils/errorSanitization.ts";
+import { sanitizeUpstreamDetails } from "@omniroute/open-sse/utils/errorSanitization.ts";
 import { sanitizePII } from "../../piiSanitizer";
 import {
   omitEncryptedReasoningFromLogChunks,
@@ -54,13 +51,16 @@ export function normalizeDetailState(value: unknown): CallLogDetailState {
 export function sanitizeErrorForLog(error: unknown): unknown {
   if (error === null || error === undefined) return null;
   if (typeof error === "string") {
-    return sanitizePII(sanitizeErrorMessage(error)).text;
+    // Internal call log preserves the raw diagnostic (paths, stack traces) for
+    // debugging. Only PII (names, emails) is sanitized; the public
+    // sanitizeErrorMessage() redaction is for external responses, not internal logs.
+    return sanitizePII(error).text;
   }
   try {
     if (error instanceof Error) {
-      const message = sanitizePII(sanitizeErrorMessage(error.message)).text;
-      const stack = sanitizePII(sanitizeErrorMessage(error.stack || "")).text;
-      const name = sanitizeErrorMessage(error.name) || "Error";
+      const message = sanitizePII(error.message).text;
+      const stack = sanitizePII(error.stack || "").text;
+      const name = error.name || "Error";
       return {
         message,
         ...(stack ? { stack } : {}),

@@ -58,6 +58,20 @@ test.after(() => {
 /** The exact leak shapes these routes produce in the field. */
 const LEAKS = [
   {
+    label: "tailscale auth key",
+    message: "tailscale up failed: invalid key tskey-auth-kMn3Qz7RtY-9fVbXsPq2LdWc",
+    secrets: ["tskey-auth-kMn3Qz7RtY-9fVbXsPq2LdWc"],
+  },
+] as const;
+
+/**
+ * Leak shapes now covered by the shared sanitizeErrorMessage — the ENOENT
+ * config-path, binary-path, daemon-state-path, and windows-config-path shapes
+ * moved here when the shared sanitizer grew to redact them. Kept as regression
+ * guards: these must stay redacted by the shared sanitizer.
+ */
+const COVERED_BY_SHARED_SANITIZER = [
+  {
     label: "config/state path (.json)",
     message:
       "ENOENT: no such file or directory, open '/home/operator/.omniroute/data/tunnels.json'",
@@ -67,11 +81,6 @@ const LEAKS = [
     label: "binary path (no extension)",
     message: "spawn /usr/local/bin/cloudflared ENOENT",
     secrets: ["/usr/local/bin/cloudflared"],
-  },
-  {
-    label: "tailscale auth key",
-    message: "tailscale up failed: invalid key tskey-auth-kMn3Qz7RtY-9fVbXsPq2LdWc",
-    secrets: ["tskey-auth-kMn3Qz7RtY-9fVbXsPq2LdWc"],
   },
   {
     label: "daemon state path",
@@ -111,6 +120,17 @@ test("sanitizeErrorMessage alone leaves every tunnel leak shape intact", () => {
       stillLeaks,
       `${leak.label}: sanitizeErrorMessage unexpectedly covers this now — if the ` +
         `shared sanitizer grew to handle it, simplify publicSafeTunnelError accordingly. Got: ${out}`
+    );
+  }
+});
+
+test("sanitizeErrorMessage now redacts the ENOENT config-path shape", () => {
+  for (const leak of COVERED_BY_SHARED_SANITIZER) {
+    const out = sanitizeErrorMessage(leak.message);
+    const stillLeaks = leak.secrets.some((s) => out.includes(s));
+    assert.ok(
+      !stillLeaks,
+      `${leak.label}: shared sanitizer regressed — this shape must stay redacted. Got: ${out}`
     );
   }
 });

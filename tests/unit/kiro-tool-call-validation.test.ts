@@ -237,7 +237,23 @@ test("Kiro stream errors become Responses response.failed events", async () => {
     "kiro-model"
   );
   const writer = transform.writable.getWriter();
-  const responseText = new Response(transform.readable).text();
+  // Collect chunks via reader: the transform emits the response.failed event
+  // then terminates the stream with an error (via controller.error), so
+  // Response.text() would reject. A manual reader captures the emitted event.
+  const reader = transform.readable.getReader();
+  const chunks: Uint8Array[] = [];
+  const readAll = (async () => {
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) chunks.push(value);
+      }
+    } catch {
+      // Stream terminates with an error after emitting response.failed;
+      // the collected chunks are what we assert on.
+    }
+  })();
 
   await writer.write(
     textEncoder.encode(
@@ -250,8 +266,16 @@ test("Kiro stream errors become Responses response.failed events", async () => {
       })}\n\n`
     )
   );
-  await writer.close();
-  const text = await responseText;
+  // Guard the close: the transform may already have closed the writable
+  // side when it emitted the terminal response.failed event; a second
+  // close() throws ERR_INVALID_STATE, which is benign here.
+  try {
+    await writer.close();
+  } catch (err) {
+    if (!/closed/i.test(err instanceof Error ? err.message : String(err))) throw err;
+  }
+  await readAll;
+  const text = Buffer.concat(chunks).toString("utf8");
 
   assert.match(text, /event: response\.failed/);
   assert.match(text, /invalid_kiro_tool_call/);
