@@ -74,6 +74,21 @@ jobs:
       API_KEY_SECRET: ci-nightly-api-key-secret-long
       DISABLE_SQLITE_AUTO_BACKUP: "true"
     steps:
+      - name: Expand Virtual Memory (Native 10GB Swap)
+        # Mirrors build.yml: this job runs a production build whose native
+        # (Turbopack) memory peak OOM-kills the 7 GB hosted runner mid-build
+        # ("The runner has received a shutdown signal", exit 143). The
+        # self-hosted omni runners have the RAM, so skip the sudo dance there.
+        if: runner.environment == 'github-hosted'
+        run: |
+          sudo swapoff -a || true
+          sudo rm -f /mnt/swapfile /swapfile
+          sudo fallocate -l 10G /mnt/swapfile || sudo dd if=/dev/zero of=/mnt/swapfile bs=1M count=10240
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -243,21 +258,56 @@ jobs:
       API_KEY_SECRET: ci-nightly-api-key-secret-long
       DISABLE_SQLITE_AUTO_BACKUP: "true"
     steps:
+      - name: Check main branch exists
+        id: maincheck
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # This repo's default branch is a release/v* branch; `main` is only
+          # created at the release squash. Skip the whole job (success, not
+          # failure) when it doesn't exist yet.
+          if gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .name >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "main branch exists — running main-green validation"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "No main branch in ${GITHUB_REPOSITORY} — skipping main-green validation"
+          fi
+
+      - name: Expand Virtual Memory (Native 10GB Swap)
+        # Mirrors build.yml (see release-green job above): the scheduled full
+        # sweep builds the tree, whose native memory peak OOM-kills the 7 GB
+        # hosted runner. Self-hosted omni runners have the RAM.
+        if: runner.environment == 'github-hosted' && steps.maincheck.outputs.exists == 'true'
+        run: |
+          sudo swapoff -a || true
+          sudo rm -f /mnt/swapfile /swapfile
+          sudo fallocate -l 10G /mnt/swapfile || sudo dd if=/dev/zero of=/mnt/swapfile bs=1M count=10240
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+
       - uses: actions/checkout@v7
+        if: steps.maincheck.outputs.exists == 'true'
         with:
           ref: main # literal — no injection surface; scheduled runs default to the repo default branch (a release/v*), so pin main explicitly
           fetch-depth: 0
           persist-credentials: false
 
       - uses: actions/setup-node@v7
+        if: steps.maincheck.outputs.exists == 'true'
         with:
           node-version: "24"
           cache: npm
 
       - uses: ./.github/actions/npm-ci-retry
+        if: steps.maincheck.outputs.exists == 'true'
 
       - name: Main-green validation
         id: validate
+        if: steps.maincheck.outputs.exists == 'true'
         env:
           EVENT_NAME: ${{ github.event_name }}
         run: |
@@ -278,7 +328,7 @@ jobs:
           cat main-green.log
 
       - name: Open / update tracking issue on HARD failure
-        if: steps.validate.outputs.exit != '0'
+        if: steps.maincheck.outputs.exists == 'true' && steps.validate.outputs.exit != '0'
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -315,7 +365,7 @@ jobs:
           fi
 
       - name: Close tracking issue when the branch is green again
-        if: steps.validate.outputs.exit == '0'
+        if: steps.maincheck.outputs.exists == 'true' && steps.validate.outputs.exit == '0'
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -334,7 +384,7 @@ jobs:
           fi
 
       - name: Upload report artifact
-        if: always()
+        if: always() && steps.maincheck.outputs.exists == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: main-green-report

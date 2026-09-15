@@ -95,6 +95,21 @@ jobs:
       DISABLE_SQLITE_AUTO_BACKUP: "true"
       REQUIRE_AXE: "1"
     steps:
+      - name: Expand Virtual Memory (Native 10GB Swap)
+        # Mirrors build.yml: the Playwright webServer self-builds Next, whose
+        # native memory peak OOM-kills the 7 GB hosted runner mid-build
+        # ("The runner has received a shutdown signal", exit 143). The
+        # self-hosted omni-light runners have the RAM, so skip sudo there.
+        if: runner.environment == 'github-hosted'
+        run: |
+          sudo swapoff -a || true
+          sudo rm -f /mnt/swapfile /swapfile
+          sudo fallocate -l 10G /mnt/swapfile || sudo dd if=/dev/zero of=/mnt/swapfile bs=1M count=10240
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
