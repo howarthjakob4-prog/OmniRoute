@@ -12,7 +12,6 @@ providers:
         messages:
           - role: user
             content: "{{prompt}}"
-      transformResponse: "json"
 defaultTest:
   options:
     provider: https
